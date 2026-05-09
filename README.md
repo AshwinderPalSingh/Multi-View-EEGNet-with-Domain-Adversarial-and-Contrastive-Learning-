@@ -67,11 +67,11 @@ The main goal is cross-subject generalization, where the model must classify mot
 │               └── fold_metrics.json
 │
 ├── CONVOPHYSIO/
-│   ├── PHYSIOeeg_preprocessing_core.py
-│   ├── PHYSIOmultiview_features.py
-│   ├── PHYSIOphase2.py
-│   ├── PHYSIOevaluation.py
-│   ├── PHYSIOtrain.py
+│   ├── eeg_preprocessing_core.py
+│   ├── multiview_features.py
+│   ├── phase2.py
+│   ├── evaluation.py
+│   ├── train.py
 │   ├── RESULTSLOG.TXT
 │   └── RESULTSPHYSIO/
 │       ├── 122pipelineOP/
