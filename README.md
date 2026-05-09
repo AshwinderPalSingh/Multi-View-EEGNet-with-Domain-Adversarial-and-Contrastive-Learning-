@@ -366,7 +366,7 @@ The BCI pipeline expects the BCI-IV 2a dataset to be available in the paths conf
 
 ```bash
 cd CONVOPHYSIO
-python PHYSIOtrain.py
+python train.py
 ```
 
 The PhysioNet pipeline expects the PhysioNet EEG Motor Movement/Imagery dataset to be available in the configured data directory.
