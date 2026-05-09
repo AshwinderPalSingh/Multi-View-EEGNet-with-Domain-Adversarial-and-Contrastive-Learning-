@@ -1,0 +1,79 @@
+{
+  "dataset": "bci",
+  "root": "/kaggle/input/datasets/ashwinderpalsingh/datasetbb",
+  "sampling_frequency_inferred": 250.0,
+  "preprocessing": {
+    "low": 0.5,
+    "high": 30.0,
+    "window_sec": 2.0,
+    "overlap_sec": 0.0,
+    "include_gamma": false,
+    "band_method": "fft_segments",
+    "band_segments": 8,
+    "channel_set": "motor21",
+    "task_filter": "mi_hand",
+    "save_mode": "all",
+    "save_feature_views": true,
+    "seed": 42,
+    "streaming": true
+  },
+  "available_views": [
+    "time",
+    "freq",
+    "bands"
+  ],
+  "save_mode": "all",
+  "streaming": true,
+  "used_subjects": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "subject_sample_counts": {
+    "1": 288,
+    "2": 288,
+    "3": 288,
+    "4": 288,
+    "5": 288,
+    "6": 288,
+    "7": 288,
+    "8": 288,
+    "9": 288
+  },
+  "class_distribution": {
+    "all": {
+      "0": 648,
+      "1": 648,
+      "2": 648,
+      "3": 648
+    }
+  },
+  "shapes": {
+    "all_X": [
+      2592,
+      22,
+      500
+    ],
+    "all_time_X": [
+      2592,
+      22,
+      500
+    ],
+    "all_freq_X": [
+      2592,
+      22,
+      251
+    ],
+    "all_bands_X": [
+      2592,
+      22,
+      16
+    ]
+  }
+}

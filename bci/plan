@@ -1,0 +1,252 @@
+# BCI Pipeline v15: From 51.77% → 80% Accuracy
+
+## Implementation Addendum
+
+The source audit found that the plan was directionally correct, but the code was only partially aligned with it. The following extra fixes were added to the pipeline:
+
+- Training CLI and `TrainConfig` defaults now match the proposed L2SO setup: 9 folds, 300 epochs, batch size 64, hidden channels 32, dropout 0.50, cosine restarts, stronger smoothing/weight decay, gentler channel dropout, and lower head LR.
+- L2SO validation subject selection now uses the next subject in the deterministic fold order, so a full 9-fold run uses each subject once as validation and once as test.
+- Subject split leakage checks now fail fast if train/validation/calibration/test subjects overlap incorrectly. Calibration is allowed to reuse the validation subject, but never the test subject.
+- DANN no longer double-scales its adversarial signal. The gradient reversal layer owns the `dann_lambda` scaling; multiplying the domain loss by the same value again made lambda 0.03 behave like 0.0009 for the backbone.
+- `SubjectAdversarialHead` is now a one-hidden-layer discriminator, which is more appropriate for seven training subjects.
+- Preprocessing defaults to `--high 30.0`; training also warns if stale prepared arrays still use `high > 30` without gamma bands.
+
+## Diagnosis Summary
+
+### Current Results
+| Metric | Value |
+|--------|-------|
+| Test Accuracy | 51.77% ± 11.34% |
+| Test AUC | 0.7581 ± 0.0961 |
+| Test ECE | 0.2261 ± 0.0680 |
+| Train Accuracy | ~90%+ |
+| Val Accuracy | ~62% (peak) |
+
+**Target**: 80% Accuracy, 0.90 AUC
+
+---
+
+## Root Cause Analysis
+
+### 🔴 BUG #1: Validation Set Does NOT Measure Cross-Subject Performance (CRITICAL)
+
+> [!CAUTION]
+> This is the single biggest reason for the 52% test accuracy. The validation set is drawn from the **same 8 training subjects** (stratified 10% holdout). The model selects checkpoints based on within-subject generalization, **not cross-subject generalization**. The selected "best" checkpoint is actually optimized for memorizing subject-specific patterns.
+
+**Evidence** (train.py lines 2051-2061):
+```python
+# Stratified 10% holdout from training data for validation
+val_mask = np.zeros(len(all_train_idx), dtype=bool)
+for cls in np.unique(y_train_all):
+    cls_positions = np.where(y_train_all == cls)[0]
+    shuffled_pos = rng.permutation(cls_positions)
+    n_val_cls = max(1, int(len(cls_positions) * 0.10))
+    val_mask[shuffled_pos[:n_val_cls]] = True
+```
+
+**Impact**: Val AUC of 0.85 doesn't correlate with test AUC because val comes from subjects the model has already seen. The checkpoint selected at val_auc=0.85 performs at 0.76 on the unseen test subject — a **9-point AUC gap**.
+
+**Fix**: Hold out a **full subject** for validation. This way, early stopping selects models that generalize to **new subjects**, not just new trials from known subjects.
+
+---
+
+### 🔴 BUG #2: Test Set is Only 50% of the Held-Out Subject (144 samples)
+
+**Evidence** (train.py lines 2063-2067):
+```python
+# Split held-out subject 50/50 for calib and test
+held_out_shuffled = rng.permutation(held_out_idx)
+n_half = len(held_out_shuffled) // 2
+calib_idx = held_out_shuffled[:n_half]
+test_idx = held_out_shuffled[n_half:]
+```
+
+**Impact**: Only 144 test trials (36 per class) makes accuracy extremely noisy. A single misclassification swings accuracy by ~0.7%. The ±11.34% standard deviation across folds confirms this instability.
+
+**Fix**: Use all 288 trials from the held-out subject for testing. Calibrate using the validation subject instead.
+
+---
+
+### 🟡 Issue #3: Model Overcapacity for Dataset Size
+
+- **2592 total samples** (only ~1728 training samples after proper LOSO split)
+- **64 hidden channels × D=2 = 128 spatial feature maps** 
+- Multi-scale branches (time + freq + band) with cross-attention, TCN, SE blocks
+- Estimated **150K+ parameters** for <2000 training samples
+- Result: Train acc 90%+ vs test acc 52% = **38-point overfitting gap**
+
+**Fix**: Reduce `hidden_channels` from 64 → 32, yielding D=2 × 32 = 64 spatial maps, cutting parameter count by ~4x.
+
+---
+
+### 🟡 Issue #4: DANN Too Strong with Only 8 Training Subjects
+
+- 2-hidden-layer adversarial head is overkill for 8-subject discrimination
+- `dann_lambda=0.10` is too aggressive — forces excessive feature invariance
+- `dann_warmup=35` means DANN activates too late (model already memorized by epoch 35)
+- Result: DANN destroys task-discriminative features after activation
+
+**Fix**: Simplify to 1-hidden-layer head, reduce `dann_lambda` to 0.03, warmup to 10.
+
+---
+
+### 🟡 Issue #5: Spectral Cutoff Mismatch
+
+- Preprocessing uses `--high 38.0 Hz` but `--include-gamma` is disabled
+- For motor imagery, relevant bands are mu (8-12 Hz) and beta (13-30 Hz)
+- 30-38 Hz contains mostly EMG artifacts and noise
+- The warning in bcirun.txt line 8 explicitly flags this
+
+**Fix**: Use `--high 30.0` for tighter spectral alignment with motor imagery bands.
+
+---
+
+## Proposed Changes
+
+### Component 1: Preprocessing (`eeg_preprocessing_core.py`)
+
+#### [MODIFY] Cell command only — no code change needed
+- Change `--high 38.0` → `--high 30.0` to remove EMG artifact contamination
+
+---
+
+### Component 2: Training Pipeline (`train.py`)
+
+#### [MODIFY] [train.py](file:///Users/ashwinder./Desktop/pipeline/PIPELINE74ACC/bci/train.py)
+
+**A. Fix Fold Splitting — Leave-Two-Subjects-Out (L2SO)**
+
+Replace the current stratified holdout validation with proper cross-subject validation:
+
+```python
+# NEW: Leave-Two-Subjects-Out
+# - Test subject: 1 subject (ALL 288 trials for testing)
+# - Val subject: 1 other subject (288 trials for cross-subject early stopping)
+# - Train: remaining 7 subjects (2016 trials)
+# - Calibration: use val subject data for AdaBN + temperature
+```
+
+This single change should recover 8-15% test accuracy because the checkpoint will be selected for **cross-subject** performance rather than within-subject.
+
+**B. Hyperparameter Defaults (tuned for 4-class BCI-IV 2a)**
+
+| Parameter | Old | New | Rationale |
+|-----------|-----|-----|-----------|
+| `hidden_channels` | 64 | 32 | 4× fewer params, reduces overfitting |
+| `dropout` | 0.40 | 0.50 | More regularization needed for small dataset |
+| `lr` | 5e-4 | 1e-3 | Higher LR for smaller model |
+| `weight_decay` | 5e-3 | 0.01 | Stronger L2 for small dataset |
+| `epochs` | 200 | 300 | Longer training with proper validation |
+| `patience` | 50 | 40 | Tighter early stopping with cross-subject val |
+| `batch_size` | 32 | 64 | More stable gradients |
+| `dann_lambda` | 0.10 | 0.03 | Gentler domain adaptation |
+| `dann_warmup` | 35 | 10 | Earlier DANN activation |
+| `supcon_weight` | 0.05 | 0.08 | Stronger class clustering |
+| `noise_std` | 0.10 | 0.05 | Less aggressive noise |
+| `noise_prob` | 0.40 | 0.50 | Moderate noise frequency |
+| `channel_dropout_prob` | 0.25 | 0.15 | Less aggressive for 22 channels |
+| `tta_passes` | 25 | 15 | Fewer passes, less noise injection |
+| `label_smoothing` | 0.05 | 0.10 | More smoothing for small dataset |
+| `cutmix_alpha` | 0.0 | 0.3 | Re-enable EEG-safe CutMix |
+| `cutmix_prob` | 0.0 | 0.15 | Moderate CutMix frequency |
+| `ema_decay` | 0.999 | 0.995 | Faster EMA tracking for smaller dataset |
+| `head_lr_mult` | 1.0 | 0.3 | Slow down head to prevent overfitting |
+| `mc_dropout_passes` | 5 | 10 | More MC-Dropout passes for 4-class |
+
+**C. Add Subject-Aware Validation Rotation**
+
+For each test fold (9 folds), rotate through different validation subjects to reduce variance:
+- Fold 1: Test=S1, Val=S2, Train=S3-S9
+- Fold 2: Test=S2, Val=S3, Train=S1,S4-S9
+- etc.
+
+---
+
+### Component 3: Model Architecture (`phase2.py`)
+
+#### [MODIFY] [phase2.py](file:///Users/ashwinder./Desktop/pipeline/PIPELINE74ACC/bci/phase2.py)
+
+**A. SubjectAdversarialHead**: Simplify from 2 hidden layers to 1 hidden layer
+- Weaker adversary allows the backbone to retain more task-relevant subject-variant features  
+- With only 7-8 training subjects, a 2-layer discriminator is overkill
+
+**B. Pre-classifier dropout**: Reduce from `dropout * 1.3` to `dropout * 1.0`
+- With proper cross-subject validation and smaller model, excessive dropout is counterproductive
+
+---
+
+## Updated Cell Commands
+
+### Preprocessing Cell
+```bash
+!python /kaggle/input/datasets/ashudonkagglemaster/15spipeline/eeg_preprocessing_core.py \
+    --dataset bci \
+    --root /kaggle/input/datasets/atulkumar4770/bci-2008 \
+    --output /kaggle/working/15sbci_prepared \
+    --high 30.0 \
+    --channel-set all \
+    --save-mode all
+```
+
+### Training Cell
+```bash
+!python /kaggle/input/datasets/ashudonkagglemaster/15spipeline/train.py \
+    --data-dir /kaggle/working/15sbci_prepared \
+    --output-dir /kaggle/working/15sbci_output \
+    --split-mode subject_kfold \
+    --num-folds 9 \
+    --epochs 300 \
+    --batch-size 64 \
+    --hidden-channels 32 \
+    --dropout 0.50 \
+    --ema-decay 0.995 \
+    --tta-passes 15 \
+    --patience 40 \
+    --scheduler cosine_restarts \
+    --lr 1e-3 \
+    --weight-decay 0.01 \
+    --dann-lambda 0.03 \
+    --dann-warmup-epochs 10 \
+    --supcon-weight 0.08 \
+    --mixup-alpha 0.0 \
+    --noise-std 0.05 \
+    --noise-prob 0.50 \
+    --channel-dropout-prob 0.15 \
+    --channel-dropout-ratio 0.15 \
+    --temporal-shift-prob 0.3 \
+    --scaling-prob 0.3 \
+    --head-lr-mult 0.3 \
+    --label-smoothing 0.10 \
+    --cutmix-alpha 0.3 \
+    --cutmix-prob 0.15 \
+    --mc-dropout-passes 10
+```
+
+---
+
+## Expected Impact
+
+| Change | Expected Accuracy Gain | Confidence |
+|--------|----------------------|------------|
+| Fix validation (L2SO) | +10-15% | Very High |
+| Reduce model capacity | +5-8% | High |
+| Fix DANN tuning | +2-4% | Medium |
+| Spectral cutoff 30Hz | +1-2% | Medium |
+| Better hyperparams | +3-5% | Medium |
+| CutMix + stronger SupCon | +2-3% | Medium |
+| **Cumulative (non-additive)** | **+18-28%** → **70-80%** | **Medium-High** |
+
+> [!IMPORTANT]
+> The single most impactful change is fixing the validation strategy. Current early stopping is optimizing for the WRONG objective (within-subject generalization). With true cross-subject validation, the model will stop training at a point that actually generalizes to new subjects.
+
+## Verification Plan
+
+### Automated Tests
+- Run full 9-fold CV on Kaggle with the updated pipeline
+- Compare per-fold and aggregate metrics against the current baseline
+- Check that val-test gap shrinks from ~10% to <3%
+
+### Manual Verification
+- Inspect confusion matrices per fold for balanced class predictions
+- Verify no fold has anomalously low performance (< 50%)
+- Check that training curves show smaller train-val gap

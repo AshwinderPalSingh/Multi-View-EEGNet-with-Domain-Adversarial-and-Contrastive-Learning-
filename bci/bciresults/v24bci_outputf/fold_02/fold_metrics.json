@@ -1,0 +1,68 @@
+{
+  "fold_name": "fold_02",
+  "split_mode": "subject_kfold",
+  "best_val_auc": 0.83080954218107,
+  "best_val_acc": 0.6111111111111112,
+  "best_val_f1": 0.6153856437275875,
+  "test_accuracy": 0.5520833333333334,
+  "test_macro_f1": 0.5484801314990825,
+  "test_auc": 0.7993344907407408,
+  "test_ece": 0.060597293078899384,
+  "pre_temperature_ece": 0.048115089535713196,
+  "temperature": 1.0726209878921509,
+  "subject_acc_mean": 0.5520833134651184,
+  "subject_acc_std": 0.0,
+  "subject_acc_min": 0.5520833134651184,
+  "subject_acc_max": 0.5520833134651184,
+  "subject_auc_mean": 0.7993344907407408,
+  "subject_auc_std": 0.0,
+  "sampling_frequency": 250.0,
+  "train_samples": 2016,
+  "val_samples": 288,
+  "calib_samples": 288,
+  "test_samples": 288,
+  "train_subjects": [
+    4,
+    3,
+    5,
+    7,
+    2,
+    6,
+    9
+  ],
+  "val_subjects": [
+    8
+  ],
+  "calib_subjects": [
+    8
+  ],
+  "test_subjects": [
+    1
+  ],
+  "train_label_distribution": {
+    "0": 504,
+    "1": 504,
+    "2": 504,
+    "3": 504
+  },
+  "val_label_distribution": {
+    "0": 72,
+    "1": 72,
+    "2": 72,
+    "3": 72
+  },
+  "calib_label_distribution": {
+    "0": 72,
+    "1": 72,
+    "2": 72,
+    "3": 72
+  },
+  "test_label_distribution": {
+    "0": 72,
+    "1": 72,
+    "2": 72,
+    "3": 72
+  },
+  "checkpoint_path": "/kaggle/working/v24bci_outputf/fold_02/best_model.pt",
+  "confusion_matrix_path": "/kaggle/working/v24bci_outputf/fold_02/confusion_matrix.png"
+}
